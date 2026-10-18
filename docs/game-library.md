@@ -135,10 +135,13 @@ saída por `build/library-postv3`.
   favoritos e pedido de lançamento. Não houve renderização em navegador real.
 - O sketch completo passou em verificação de tipos (`-fsyntax-only`) com GCC
   RISC-V do core ESP32 3.3.12, tanto para `prev3` quanto para `postv3`.
-- A montagem/linkedição não foi concluída: o executável assembler do ambiente
-  falha por ausência de `/proc/self/exe`. **Não há `.bin` instalável nesta entrega.**
-- O workflow de build está preparado para produzir os binários em GitHub Actions.
-  Ele ainda não foi executado em um fork remoto.
+- Compilação completa, montagem e linkedição das variantes `prev3` e `postv3`
+  concluídas com sucesso no GitHub Actions em 18/10/2026, junto dos testes do servidor.
+- [Execução verificada e binários](https://github.com/gabrieltalamoni/MiSTer_monitor/actions/runs/39140187820).
+  Fonte compilada: commit `9f5b6af3386133778adff9e29abac4adb45b1e87` da branch
+  `feature/guition-game-library` deste fork.
+- Os artefatos contêm imagens app-only para OTA e merged para flash por cabo.
+  Esta atualização da documentação não altera o código compilado.
 - Não houve teste em MiSTer/Guition físico, nem acesso à coleção real do usuário.
 
 ## Verificação
