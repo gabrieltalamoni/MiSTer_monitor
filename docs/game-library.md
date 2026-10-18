@@ -44,6 +44,21 @@ como se fosse o do MiSTer e não altera ROMs, BIOS, saves ou core binaries.
 
 ## Atualização: somente sistemas com jogos
 
+Esta branch agora usa a seleção solicitada: **SNES, Mega Drive/Genesis,
+Master System, TurboGrafx-16/TG16, NES, N64 e PSX**. Mega Drive e Genesis
+representam o mesmo sistema; TurboGrafx, TG16 e TGFX16 também. Os nomes de
+pasta SMS/MasterSystem, MegaDrive/Genesis e TGFX16/TG16/PC Engine são aceitos,
+com diferenças de maiúsculas, espaços e hífens normalizadas. Mega CD,
+TurboGrafx-CD e SuperGrafx permanecem sistemas separados, fora desta seleção.
+
+A seleção é aplicada antes de verificar ROMs, subpastas e ZIPs. Assim o
+servidor deixa de percorrer os sistemas excluídos, reduzindo trabalho e tempo
+de abertura da tela Sistemas. O ganho real depende da coleção e deve ser
+medido no MiSTer; a medição anterior foi de 10,53 s antes desta seleção.
+Dentro dos sete sistemas, o filtro continua ocultando os que estiverem vazios.
+A mesma seleção vale para os favoritos exibidos, preservando os favoritos
+de sistemas ocultos no arquivo de estado.
+
 Para uma biblioteca já instalada, substitua apenas
 `Scripts/.config/mister_monitor/game_library.py` pela versão desta branch,
 guardando uma cópia do arquivo anterior. Execute **MiSTer_Monitor** no menu
@@ -66,6 +81,11 @@ Os 16 testes do servidor passaram localmente após essa alteração, cobrindo
 sistemas vazios, imagens sem ROMs, subpastas, ZIPs vazios e com jogos, Arcade,
 paginação, atualização da coleção e ciclos/escapes por links simbólicos.
 O filtro ainda precisa de conferência na coleção do usuário.
+
+Após a seleção dos sete sistemas, os 20 testes do servidor passaram localmente,
+incluindo a verificação de que sistemas excluídos não são consultados. Para
+personalizar esta seleção no servidor, ajuste `DEFAULT_SYSTEMS` em
+`game_library.py`; `systems=None` na classe permite o modo sem seleção.
 
 ## Instalação do servidor
 
