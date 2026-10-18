@@ -17,6 +17,19 @@ from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHandler
 
 
+DEFAULT_SYSTEMS = ('SNES', 'Genesis', 'SMS', 'TGFX16', 'NES', 'N64', 'PSX')
+SYSTEM_ALIASES = {
+    'snes': 'snes', 'supernintendo': 'snes', 'superfamicom': 'snes',
+    'genesis': 'genesis', 'megadrive': 'genesis',
+    'sms': 'sms', 'mastersystem': 'sms', 'segamastersystem': 'sms',
+    'tgfx16': 'tgfx16', 'tg16': 'tgfx16', 'turbografx': 'tgfx16',
+    'turbografx16': 'tgfx16', 'pcengine': 'tgfx16',
+    'nes': 'nes', 'famicom': 'nes',
+    'n64': 'n64', 'nintendo64': 'n64',
+    'psx': 'psx', 'ps1': 'psx', 'playstation': 'psx',
+}
+
+
 class LibraryError(Exception):
     def __init__(self, status, message):
         self.status, self.message = status, message
@@ -52,11 +65,14 @@ class RemoteClient:
 
 
 class GameLibrary:
-    def __init__(self, root='/media/fat', state_dir=None, remote=None, artwork=None):
+    def __init__(self, root='/media/fat', state_dir=None, remote=None, artwork=None,
+                 systems=DEFAULT_SYSTEMS):
         self.root = os.path.abspath(root)
         self.games = os.path.join(self.root, 'games')
         self.arcade = os.path.join(self.root, '_Arcade')
         self.state_dir = state_dir or os.path.dirname(__file__)
+        self.systems = None if systems is None else frozenset(
+            self._system_key(name) for name in systems)
         self.favorites_file = os.path.join(self.state_dir, 'library_favorites.json')
         self.remote = remote or RemoteClient()
         self.artwork = artwork or (lambda item: '')
@@ -99,10 +115,27 @@ class GameLibrary:
                 pass
         return False
 
+    @staticmethod
+    def _system_key(name):
+        key = ''.join(char for char in name.casefold() if char.isalnum())
+        return SYSTEM_ALIASES.get(key, key)
+
+    def system_enabled(self, path):
+        if self.systems is None:
+            return True
+        if path == self.arcade or path.startswith(self.arcade + '/'):
+            return 'arcade' in self.systems
+        folder = os.path.relpath(path, self.games).split(os.sep)[0]
+        return self._system_key(folder) in self.systems
+
     def _normalise(self, item):
         if not isinstance(item, dict) or not self.allowed(item.get('path')):
             return None
         path = item['path']
+        # Apply the selection before any recursive ROM/ZIP inspection.
+        # Identity follows the games folder, not a possibly absent Remote ID.
+        if not self.system_enabled(path):
+            return None
         kind = item.get('type', '')
         if kind in ('folder', 'zip'):
             kind = 'folder'
@@ -173,11 +206,13 @@ class GameLibrary:
         if favorites:
             with self.lock:
                 rows = [dict(row) for row in self.favorites.values()
-                        if self.allowed(row['path'])]
+                        if self.allowed(row['path']) and self.system_enabled(row['path'])]
             up = ''
         else:
             if folder and not self.allowed(folder):
                 raise LibraryError(403, 'Somente jogos no microSD do MiSTer são permitidos.')
+            if folder and not self.system_enabled(folder):
+                raise LibraryError(403, 'Este sistema não está na seleção da biblioteca.')
             # Remote enumerates systems on all configured mounts. Filter before
             # sending them to the display: this screen is explicitly microSD.
             rows = self._list_rows(folder)
