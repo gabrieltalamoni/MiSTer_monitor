@@ -1,0 +1,58 @@
+name: Guition game library
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'mister_monitor_Guition10inch/**'
+      - 'MiSTer/Scripts/.config/mister_monitor/**'
+      - 'tests/**'
+      - '.github/workflows/guition-library.yml'
+  push:
+    branches: ['feature/guition-game-library']
+permissions:
+  contents: read
+jobs:
+  server-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python3 -m unittest discover -s tests -v
+      - run: python3 tools/check_server.py
+      - run: node --check MiSTer/Scripts/.config/mister_monitor/library/app.js
+  firmware:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        variant: [prev3, postv3]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/setup-arduino-cli@v2
+      - name: Install pinned core and libraries
+        run: |
+          arduino-cli config init
+          arduino-cli config add board_manager.additional_urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32@3.3.12
+          arduino-cli lib install 'M5GFX@0.2.33' 'JPEGDEC@1.8.4' 'PNGdec@1.1.6' 'ArduinoJson@7.4.3'
+      - name: Build without private upstream developer credentials
+        env:
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          printf '#pragma once\n#define SS_DEV_ID_EMBEDDED ""\n#define SS_DEV_PASS_EMBEDDED ""\n' > mister_monitor_Guition10inch/ss_credentials.h
+          arduino-cli compile --jobs 2 \
+            --fqbn "esp32:esp32:esp32p4:ChipVariant=${VARIANT},PSRAM=enabled,FlashMode=qio,FlashFreq=80,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB" \
+            --output-dir "build/library-${VARIANT}" mister_monitor_Guition10inch
+      - uses: actions/upload-artifact@v4
+        with:
+          name: guition-library-${{ matrix.variant }}
+          include-hidden-files: true
+          path: |
+            build/library-${{ matrix.variant }}/*.bin
+            docs/game-library.md
+            MiSTer/Scripts/.config/mister_monitor/game_library.py
+            MiSTer/Scripts/.config/mister_monitor/mister_status_server.py
+            MiSTer/Scripts/.config/mister_monitor/library/
+            MiSTer/Scripts/Install_Monitor_Library.sh
