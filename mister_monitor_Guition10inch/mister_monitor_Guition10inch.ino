@@ -485,6 +485,7 @@ bool discoverMister(uint8_t attempts = 5, uint16_t replyWaitMs = 600) {
 #include "WebConfig.h"   // /config editor + /reboot on the device web server
 #include "WebFiles.h"    // /files SD card browser (list, download, upload, delete)
 #define FIRMWARE_BOARD_ID (F_CPU >= 400000000L ? "guition10inch_v3" : "guition10inch")   // key of this build in firmware/manifest.json
+#define MISTER_LIBRARY_BUILD 1
 #include "FirmwareUpdate.h"   // /update page + install a newer release from the MiSTer
 #include "Weather.h"          // outside temperature for the standby clock
 #include "CoprocessorUpdate.h"  // keeps the C6 radio firmware in step with the host
@@ -4353,9 +4354,28 @@ static void standbyRestoreScreen() {
   }
 }
 
+#include "GameLibrary.h"  // Guition native microSD browser, favorites and launch
+
 void loop() {
   Board.update();
   screenshotServer.handleClient();  // Non-blocking screenshot server poll
+
+  if (libraryActive) {
+    lastButtonPress = millis();
+    if (libraryDirty) libraryDraw();
+    auto libraryTap = Board.Touch.getDetail();
+    if (libraryTap.wasPressed()) libraryTouch(libraryTap.x, libraryTap.y);
+    delay(15);
+    return;
+  }
+  if (!standbyActive) {
+    libraryDrawEntry();
+    auto libraryTap = Board.Touch.getDetail();
+    if (libraryTap.wasPressed() && libraryInside(libraryTap.x, libraryTap.y, 1030, 8, 230)) {
+      libraryOpen();
+      return;
+    }
+  }
 
   // Update requested from the /update page. Runs here, not in the handler:
   // handleClient() is pumped from inside drawing and download code, and a

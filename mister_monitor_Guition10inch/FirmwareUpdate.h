@@ -178,6 +178,14 @@ static String fwJsonValue(const String& json, const char* key, int from, int to)
 // talks to the server, not from a draw path.
 // -----------------------------------------------------------------------------
 inline bool firmwareCheckOffer() {
+  // Experimental library build: an official upstream OTA would erase this UI.
+  // Manual .bin upload remains available. Fork releases use the dedicated CI.
+#ifdef MISTER_LIBRARY_BUILD
+  firmwareOffer.available = false;
+  firmwareOffer.checked = true;
+  firmwareOffer.reason = "Library build: install updates from this fork";
+  return false;
+#endif
   FirmwareOffer o;
   o.checked = true;
 
