@@ -13,6 +13,9 @@ static String libraryFolder, libraryUp, libraryQuery, libraryToken, libraryNotic
 static int libraryPage = 1, libraryPages = 1, libraryTotal = 0;
 static int librarySelected = -1;
 static const int LIBRARY_PAGE_SIZE = 6;
+// Listing only populated systems can take longer than 10 s on a real card.
+// HTTPClient::setTimeout takes uint16_t milliseconds (maximum 65535).
+static const uint16_t LIBRARY_REQUEST_TIMEOUT_MS = 60000;
 struct LibraryItem {
   String id, name, path, system;
   bool folder = false, favorite = false;
@@ -43,7 +46,7 @@ static bool libraryRequest(const String& route, JsonDocument& result,
   }
   WiFiClient client;
   HTTPClient http;
-  http.setTimeout(10000);
+  http.setTimeout(LIBRARY_REQUEST_TIMEOUT_MS);
   if (!http.begin(client, String("http://") + misterIP + ":8081" + route)) {
     libraryNotice = "Nao foi possivel conectar ao servidor.";
     return false;
@@ -55,17 +58,36 @@ static bool libraryRequest(const String& route, JsonDocument& result,
     http.addHeader("Content-Type", "application/json");
     code = http.POST(body);
   } else code = http.GET();
+  if (code <= 0) {
+    libraryNotice = code == HTTPC_ERROR_READ_TIMEOUT
+      ? "Tempo limite (60s). Toque em Atualizar."
+      : "Falha de conexao (" + String(code) + "): " + HTTPClient::errorToString(code);
+    http.end();
+    return false;
+  }
   int size = http.getSize();
-  if (code <= 0 || size < 0 || size > 24576) {
-    libraryNotice = "Servidor indisponivel ou resposta muito grande.";
+  if (size < 0) {
+    libraryNotice = "HTTP " + String(code) + ": resposta sem tamanho. Reinicie o MiSTer_Monitor.";
+    http.end();
+    return false;
+  }
+  if (size > 24576) {
+    libraryNotice = "Resposta grande demais (" + String(size) + " bytes). Atualize o servidor.";
     http.end();
     return false;
   }
   // The server uses Content-Length. Parse only bounded, small page responses.
   String body = http.getString();
   http.end();
+  if (body.length() != (size_t)size) {
+    libraryNotice = "Resposta incompleta. Toque em Atualizar.";
+    return false;
+  }
   DeserializationError error = deserializeJson(result, body);
-  if (error) { libraryNotice = "Atualize o servidor com a biblioteca de jogos."; return false; }
+  if (error) {
+    libraryNotice = "HTTP " + String(code) + ": JSON invalido. Confira o servidor da biblioteca.";
+    return false;
+  }
   if (code != 200) {
     libraryNotice = result["error"].as<String>();
     if (!libraryNotice.length()) libraryNotice = "Erro HTTP " + String(code);
