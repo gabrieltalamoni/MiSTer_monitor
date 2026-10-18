@@ -59,7 +59,7 @@ class LibraryTests(unittest.TestCase):
         Path(self.root+'/games/SNES').mkdir(parents=True)
         Path(self.root+'/games/SNES/Super Mario World.sfc').touch()
         self.remote = FakeRemote(self.root)
-        self.lib = GameLibrary(self.root, self.tmp.name+'/state', self.remote)
+        self.lib = GameLibrary(self.root, self.tmp.name+'/state', self.remote, systems=None)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -79,7 +79,7 @@ class LibraryTests(unittest.TestCase):
     def tree(self, listings):
         views = {folder: {'items': items} for folder, items in listings.items()}
         self.remote = TreeRemote(views)
-        self.lib = GameLibrary(self.root, self.tmp.name+'/state', self.remote)
+        self.lib = GameLibrary(self.root, self.tmp.name+'/state', self.remote, systems=None)
 
     @staticmethod
     def row(path, kind='folder'):
@@ -181,6 +181,61 @@ class LibraryTests(unittest.TestCase):
             self.row(folder/'Unreadable'), self.row(folder/'Mario.sfc', 'game')]})
         self.assertEqual(self.lib.page()['total'], 1)
         self.assertEqual(len(self.remote.calls), 2)
+
+    def test_default_selection_skips_other_systems_before_scanning(self):
+        games = Path(self.root)/'games'
+        selected = ('SNES', 'MegaDrive', 'MasterSystem', 'TGFX16', 'NES', 'N64', 'PSX')
+        excluded = ('Amiga', 'GBA', 'MegaCD', 'TGFX16-CD', 'SuperGrafx', 'Atari2600')
+        folders = [games/name for name in (*selected, *excluded)]
+        for folder in folders:
+            folder.mkdir(exist_ok=True)
+            (folder/'ROM.bin').touch()
+        arcade = Path(self.root)/'_Arcade'
+        arcade.mkdir()
+        (arcade/'1942.mra').touch()
+        # Missing views for excluded systems make any unnecessary scan fail.
+        self.tree({'': [self.row(p) for p in folders], **{
+            str(games/name): [self.row(games/name/'ROM.bin', 'game')]
+            for name in selected}})
+        self.lib = GameLibrary(self.root, self.tmp.name+'/state', self.remote)
+        home = self.lib.page(per=24)
+        self.assertEqual({row['name'] for row in home['items']}, set(selected))
+        self.assertEqual(home['total'], 7)
+        self.assertEqual(len(self.remote.calls), 8)  # Root + seven selected systems.
+        for name in excluded:
+            with self.assertRaises(LibraryError) as err:
+                self.lib.page(str(games/name))
+            self.assertEqual(err.exception.status, 403)
+
+    def test_selected_system_aliases_and_case(self):
+        lib = GameLibrary(self.root, self.tmp.name+'/state', self.remote)
+        for name in ('SNES', 'snes', 'Super Nintendo', 'MegaDrive', 'MEGADRIVE',
+                     'Genesis', 'SMS', 'Master System', 'TurboGrafx', 'TurboGrafx-16',
+                     'TG16', 'TGFX16', 'PC Engine', 'NES', 'N64', 'Nintendo 64',
+                     'PSX', 'PS1', 'PlayStation'):
+            with self.subTest(name=name):
+                self.assertTrue(lib.system_enabled(self.root+'/games/'+name+'/ROM.zip/Game.bin'))
+        for name in ('TGFX16-CD', 'MegaCD', 'SuperGrafx', 'FDS', 'GBA'):
+            self.assertFalse(lib.system_enabled(self.root+'/games/'+name+'/ROM.bin'))
+        self.assertFalse(lib.system_enabled(self.root+'/_Arcade/1942.mra'))
+
+    def test_selection_keeps_only_populated_systems(self):
+        games = Path(self.root)/'games'
+        (games/'NES').mkdir()
+        self.tree({'': [self.row(games/'SNES'), self.row(games/'NES')],
+                   str(games/'SNES'): [self.row(games/'SNES'/'Mario.sfc', 'game')]})
+        self.lib = GameLibrary(self.root, self.tmp.name+'/state', self.remote)
+        self.assertEqual([row['name'] for row in self.lib.page()['items']], ['SNES'])
+
+    def test_hidden_system_favorites_are_preserved_but_not_displayed(self):
+        games = Path(self.root)/'games'
+        self.tree({str(games/'GBA'): [self.row(games/'GBA'/'Metroid.gba', 'game')]})
+        item = self.lib.page(str(games/'GBA'))['items'][0]
+        self.lib.set_favorite(item['id'], True)
+        selected = GameLibrary(self.root, self.tmp.name+'/state', self.remote)
+        self.assertEqual(selected.page(favorites=True)['total'], 0)
+        all_systems = GameLibrary(self.root, self.tmp.name+'/state', self.remote, systems=None)
+        self.assertEqual(all_systems.page(favorites=True)['items'][0]['id'], item['id'])
 
     def test_traversal_symlink_and_prefix_sibling_rejected(self):
         outside = Path(self.tmp.name)/'outside'; outside.mkdir()
