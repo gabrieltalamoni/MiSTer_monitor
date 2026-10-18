@@ -81,6 +81,11 @@ class GameLibrary:
         self.launch_lock = threading.Lock()
         self.last_launch = 0.0
         self.entries = OrderedDict()
+        self.cache_lock = threading.RLock()
+        self.list_cache = OrderedDict()
+        self.list_cache_bytes = 0
+        self.cache_ttl = 60
+        self.cache_budget = 4 * 1024 * 1024
         self.favorites = self._load_favorites()
 
     def _load_favorites(self):
@@ -156,7 +161,52 @@ class GameLibrary:
                'system': system[:80]}
         return row
 
+    def clear_cache(self):
+        with self.cache_lock:
+            self.list_cache.clear()
+            self.list_cache_bytes = 0
+
+    def _cache_get(self, key):
+        cached = self.list_cache.get(key)
+        if cached is None:
+            return None
+        created, data = cached
+        if time.monotonic() - created >= self.cache_ttl:
+            self.list_cache.pop(key)
+            self.list_cache_bytes -= len(data)
+            return None
+        self.list_cache.move_to_end(key)
+        # Each caller gets its own rows: favorite/artwork flags cannot leak
+        # into other pages, requests or the cached catalogue.
+        return json.loads(data)
+
+    def _cache_put(self, key, rows):
+        data = json.dumps(rows, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+        old = self.list_cache.pop(key, None)
+        if old is not None:
+            self.list_cache_bytes -= len(old[1])
+        if len(data) > self.cache_budget:
+            return
+        while self.list_cache and (len(self.list_cache) >= 32 or
+                                  self.list_cache_bytes + len(data) > self.cache_budget):
+            _, (_, removed) = self.list_cache.popitem(last=False)
+            self.list_cache_bytes -= len(removed)
+        self.list_cache[key] = (time.monotonic(), data)
+        self.list_cache_bytes += len(data)
+
     def _list_rows(self, folder):
+        # Coalesce concurrent requests and bound retained JSON to 4 MiB/32
+        # listings. The separate entry/favorite lock remains free for covers.
+        with self.cache_lock:
+            key = ('folder', folder)
+            cached = self._cache_get(key)
+            if cached is not None:
+                return cached
+            rows = self._fetch_rows(folder)
+            self._cache_put(key, rows)
+            return rows
+
+    def _fetch_rows(self, folder):
         endpoint = 'menu/view' if folder.startswith(self.arcade) else 'games/view'
         raw = self.remote.call(endpoint, {'path': folder})
         if (not isinstance(raw, dict) or 'items' not in raw
@@ -169,8 +219,8 @@ class GameLibrary:
         """Find one Remote-recognised game, including subfolders and ZIPs.
 
         Do not infer presence from a system folder, cover, or ZIP filename.
-        Empty physical directories need no HTTP call. Inspect fresh listings
-        on every home request so adding/removing ROMs needs only Atualizar.
+        Empty physical directories need no HTTP call. Atualizar explicitly
+        clears cached listings; normal navigation reuses them for 60 seconds.
         """
         pending, visited = [folder], set()
         while pending:
@@ -194,7 +244,22 @@ class GameLibrary:
             pending.extend(row['path'] for row in reversed(rows) if row['kind'] == 'folder')
         return False
 
-    def page(self, folder='', page=1, per=6, query='', favorites=False):
+    def _home_rows(self):
+        with self.cache_lock:
+            key = ('home', '')
+            cached = self._cache_get(key)
+            if cached is not None:
+                return cached
+            rows = self._list_rows('')
+            if os.path.isdir(self.arcade) and not any(row['path'] == self.arcade for row in rows):
+                arcade = self._normalise({'path': self.arcade, 'name': 'Arcade', 'type': 'folder'})
+                if arcade:
+                    rows.insert(0, arcade)
+            rows = [row for row in rows if row['kind'] == 'game' or self._has_games(row['path'])]
+            self._cache_put(key, rows)
+            return rows
+
+    def page(self, folder='', page=1, per=6, query='', favorites=False, refresh=False):
         if not isinstance(folder, str) or not isinstance(query, str):
             raise LibraryError(400, 'Pasta ou busca inválida.')
         try:
@@ -203,6 +268,8 @@ class GameLibrary:
             raise LibraryError(400, 'Página inválida.')
         if page < 1 or page > 1000000 or not 1 <= per <= 24 or len(query) > 120:
             raise LibraryError(400, 'Página ou busca fora dos limites.')
+        if refresh:
+            self.clear_cache()
         if favorites:
             with self.lock:
                 rows = [dict(row) for row in self.favorites.values()
@@ -215,13 +282,7 @@ class GameLibrary:
                 raise LibraryError(403, 'Este sistema não está na seleção da biblioteca.')
             # Remote enumerates systems on all configured mounts. Filter before
             # sending them to the display: this screen is explicitly microSD.
-            rows = self._list_rows(folder)
-            if not folder and os.path.isdir(self.arcade):
-                if not any(row['path'] == self.arcade for row in rows):
-                    rows.insert(0, self._normalise({'path': self.arcade, 'name': 'Arcade', 'type': 'folder'}))
-            if not folder:
-                rows = [row for row in rows if row and
-                        (row['kind'] == 'game' or self._has_games(row['path']))]
+            rows = self._list_rows(folder) if folder else self._home_rows()
             up = os.path.dirname(folder) if folder else ''
             if up in (self.root, self.games) or not self.allowed(up):
                 up = ''
@@ -325,7 +386,8 @@ class GameLibrary:
                 self.respond(handler, 200, data, 'application/javascript; charset=utf-8' if name.endswith('.js') else 'text/html; charset=utf-8')
             elif method == 'GET' and parsed.path == '/library/page':
                 self.respond(handler, 200, self.page(get('folder'), get('page', '1'),
-                             get('per', '6'), get('q'), get('favorites') == '1'))
+                             get('per', '6'), get('q'), get('favorites') == '1',
+                             get('refresh') == '1'))
             elif method == 'GET' and parsed.path == '/library/artwork':
                 row = self.entry(get('id'))
                 path = self.artwork(row)
