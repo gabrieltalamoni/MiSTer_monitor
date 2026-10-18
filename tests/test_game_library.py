@@ -39,11 +39,25 @@ class FakeRemote:
                          'Donkey Kong', 'Mega Man X', 'Yoshi', 'Ação & "aventura"']]}
 
 
+class TreeRemote:
+    """Explicit Remote listings, including virtual ZIP directories."""
+    def __init__(self, views):
+        self.views, self.calls = views, []
+
+    def call(self, endpoint, payload):
+        self.calls.append((endpoint, payload))
+        result = self.views[payload['path']]
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
 class LibraryTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = self.tmp.name+'/sd'
         Path(self.root+'/games/SNES').mkdir(parents=True)
+        Path(self.root+'/games/SNES/Super Mario World.sfc').touch()
         self.remote = FakeRemote(self.root)
         self.lib = GameLibrary(self.root, self.tmp.name+'/state', self.remote)
 
@@ -61,6 +75,112 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual((len(first['items']), len(second['items'])), (6,2))
         self.assertFalse({x['id'] for x in first['items']} & {x['id'] for x in second['items']})
         self.assertEqual(self.games(query='super mario')['items'][0]['name'], 'Super Mario World')
+
+    def tree(self, listings):
+        views = {folder: {'items': items} for folder, items in listings.items()}
+        self.remote = TreeRemote(views)
+        self.lib = GameLibrary(self.root, self.tmp.name+'/state', self.remote)
+
+    @staticmethod
+    def row(path, kind='folder'):
+        return {'path': str(path), 'type': kind, 'name': Path(path).name}
+
+    def test_systems_require_games_including_nested_zip_and_arcade(self):
+        games = Path(self.root)/'games'
+        empty, media, nested, zipped = [games/name for name in ('Empty', 'MediaOnly', 'NES', 'Genesis')]
+        arcade = Path(self.root)/'_Arcade'
+        for folder in (empty, media, nested/'USA', zipped, arcade/'Classics'):
+            folder.mkdir(parents=True)
+        (media/'cover.jpg').touch()
+        (nested/'USA'/'Mario.nes').touch()
+        (zipped/'Batman.zip').touch()
+        (arcade/'Classics'/'1942.mra').touch()
+        self.tree({
+            '': [self.row(p) for p in (empty, media, nested, zipped, games/'SNES')],
+            str(media): [],  # Remote excludes artwork, configuration and text files.
+            str(games/'SNES'): [self.row(games/'SNES'/'Mario.sfc', 'game')],
+            str(nested): [self.row(nested/'USA')],
+            str(nested/'USA'): [self.row(nested/'USA'/'Mario.nes', 'game')],
+            str(zipped): [self.row(zipped/'Batman.zip', 'zip')],
+            str(zipped/'Batman.zip'): [self.row(zipped/'Batman.zip'/'Batman.md', 'game')],
+            str(arcade): [self.row(arcade/'Classics')],
+            str(arcade/'Classics'): [self.row(arcade/'Classics'/'1942.mra', 'mra')],
+        })
+        home = self.lib.page(per=24)
+        self.assertEqual([row['name'] for row in home['items']], ['Arcade', 'Genesis', 'NES', 'SNES'])
+        self.assertEqual((home['total'], home['pages']), (4, 1))
+        self.assertNotIn(('games/view', {'path': str(empty)}), self.remote.calls)
+        self.assertIn(('menu/view', {'path': str(arcade/'Classics')}), self.remote.calls)
+        # Ordinary folder navigation still shows its folders and ZIPs.
+        self.assertEqual(self.lib.page(str(zipped))['items'][0]['kind'], 'folder')
+
+    def test_home_refresh_tracks_added_and_removed_games(self):
+        folder = Path(self.root)/'games/SNES'
+        rom = folder/'Super Mario World.sfc'
+        self.tree({'': [self.row(folder)], str(folder): []})
+        self.assertEqual(self.lib.page()['total'], 0)
+        self.remote.views[str(folder)]['items'] = [self.row(rom, 'game')]
+        self.assertEqual(self.lib.page()['total'], 1)
+        rom.unlink()
+        self.remote.views[str(folder)]['items'] = []
+        self.assertEqual(self.lib.page()['total'], 0)
+
+    def test_empty_zip_and_empty_arcade_are_hidden(self):
+        folder = Path(self.root)/'games/SNES'
+        (folder/'Super Mario World.sfc').unlink()
+        (folder/'Empty.zip').touch()
+        arcade = Path(self.root)/'_Arcade'
+        arcade.mkdir()
+        self.tree({'': [self.row(folder), self.row(arcade)],
+                   str(folder): [self.row(folder/'Empty.zip', 'zip')]})
+        self.remote.views[str(folder/'Empty.zip')] = {'items': None}
+        self.assertEqual(self.lib.page()['total'], 0)
+        self.assertEqual(self.lib.page(str(folder/'Empty.zip'))['items'], [])
+
+    def test_system_scan_rejects_escape_and_stops_symlink_cycles(self):
+        folder = Path(self.root)/'games/Cycle'
+        folder.mkdir()
+        (folder/'again').symlink_to(folder, target_is_directory=True)
+        outside = Path(self.tmp.name)/'outside'
+        outside.mkdir()
+        (outside/'Secret.sfc').touch()
+        (folder/'external').symlink_to(outside, target_is_directory=True)
+        self.tree({'': [self.row(folder)], str(folder): [self.row(folder/'again'), self.row(folder/'external')]})
+        self.assertEqual(self.lib.page()['total'], 0)
+        self.assertEqual(len(self.remote.calls), 2)
+
+    def test_system_filter_runs_before_pagination(self):
+        games = Path(self.root)/'games'
+        empty = [games/('Empty'+str(i)) for i in range(20)]
+        for folder in empty:
+            folder.mkdir()
+        nes = games/'NES'
+        nes.mkdir()
+        (nes/'Mario.nes').touch()
+        snes = games/'SNES'
+        self.tree({'': [self.row(p) for p in (*empty, snes, nes)],
+                   str(nes): [self.row(nes/'Mario.nes', 'game')],
+                   str(snes): [self.row(snes/'Mario.sfc', 'game')]})
+        first, second = self.lib.page(per=1), self.lib.page(per=1, page=2)
+        self.assertEqual((first['total'], first['pages']), (2, 2))
+        self.assertEqual(first['items'][0]['name'], 'NES')
+        self.assertEqual(second['items'][0]['name'], 'SNES')
+        self.assertEqual(self.lib.page(query='snes')['total'], 1)
+
+    def test_system_scan_errors_are_not_reported_as_empty(self):
+        folder = Path(self.root)/'games/SNES'
+        self.tree({'': [self.row(folder)]})
+        for result in (LibraryError(503, 'Remote indisponível'), {'items': 'invalid'}, {}):
+            self.remote.views[str(folder)] = result
+            with self.subTest(result=result), self.assertRaises(LibraryError):
+                self.lib.page()
+
+    def test_system_scan_stops_at_first_game(self):
+        folder = Path(self.root)/'games/SNES'
+        self.tree({'': [self.row(folder)], str(folder): [
+            self.row(folder/'Unreadable'), self.row(folder/'Mario.sfc', 'game')]})
+        self.assertEqual(self.lib.page()['total'], 1)
+        self.assertEqual(len(self.remote.calls), 2)
 
     def test_traversal_symlink_and_prefix_sibling_rejected(self):
         outside = Path(self.tmp.name)/'outside'; outside.mkdir()
