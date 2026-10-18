@@ -4360,11 +4360,14 @@ void loop() {
   Board.update();
   screenshotServer.handleClient();  // Non-blocking screenshot server poll
 
+  libraryPoll();
   if (libraryActive) {
     lastButtonPress = millis();
-    if (libraryDirty) libraryDraw();
     auto libraryTap = Board.Touch.getDetail();
     if (libraryTap.wasPressed()) libraryTouch(libraryTap.x, libraryTap.y);
+    if (!libraryActive) return;
+    if (libraryDirty) libraryDraw();
+    if (!libraryTap.wasPressed()) libraryCoverTick();
     delay(15);
     return;
   }
