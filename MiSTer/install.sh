@@ -86,6 +86,8 @@ mkdir -p "${CONFIG_DIR}"
 # ===== Copy files =====
 echo "Installing mister_status_server.py..."
 cp "${SOURCE_SCRIPTS_DIR}/.config/mister_monitor/mister_status_server.py" "${CONFIG_DIR}/"
+cp "${SOURCE_SCRIPTS_DIR}/.config/mister_monitor/game_library.py" "${CONFIG_DIR}/"
+cp -R "${SOURCE_SCRIPTS_DIR}/.config/mister_monitor/library" "${CONFIG_DIR}/"
 
 echo "Installing start_monitor.sh..."
 cp "${SOURCE_SCRIPTS_DIR}/start_monitor.sh" "${SCRIPTS_DIR}/"
