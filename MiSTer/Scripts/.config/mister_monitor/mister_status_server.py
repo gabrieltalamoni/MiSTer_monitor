@@ -2788,11 +2788,40 @@ PUBLIC_ENDPOINTS = [
     ('/status/unknown_cores',     'Cores this MiSTer ran that we cannot name'),
     ('/status/error_state',       'Current error state (troubleshooting)'),
     ('/status/version',           'Server version'),
+    ('/library',                  'microSD game library: covers, favorites and touch launch'),
     ('/media/artwork',            'Artwork for the loaded game, from the installed pack'),
     ('/media/snap',               'Screenshot for the loaded game, from the installed pack'),
     ('/media/title',              'Title screen for the loaded game, from the installed pack'),
     ('/firmware/manifest',        'Display firmware shipped with this server (version and per-board images)'),
 ]
+
+def _library_artwork(item):
+    """Resolve any catalogued game's pack cover without changing active state."""
+    raw = item.get('system', '')
+    aliases = {'megadrive': 'Genesis', 'mastersystem': 'SMS', 'gameboy': 'GAMEBOY',
+               'gameboycolor': 'GBC', 'segacd': 'MegaCD', 'tgfx16cd': 'TGFX16-CD'}
+    folder = aliases.get(raw.lower(), raw)
+    folders = [value for value in set(_PACK_SYSTEM.values()) | {'Arcade'}
+               if value.lower() == folder.lower()]
+    if not folders:
+        folders = _pack_folders(CORE_NAME_MAPPING.get(raw, raw))
+    key = os.path.splitext(os.path.basename(item['path']))[0]
+    if item['path'].lower().endswith('.mra'):
+        try:
+            import xml.etree.ElementTree as ET
+            if os.path.getsize(item['path']) <= 65536:
+                key = ET.parse(item['path']).getroot().findtext('setname') or key
+        except (OSError, ET.ParseError):
+            pass
+    return _pack_lookup_any(folders, [key], '', '', 'artwork')[0]
+
+
+try:
+    from game_library import GameLibrary
+    _game_library = GameLibrary(artwork=_library_artwork)
+except ImportError:
+    _game_library = None
+
 
 class MiSTerStatusHandler(BaseHTTPRequestHandler):
 
@@ -2820,6 +2849,9 @@ class MiSTerStatusHandler(BaseHTTPRequestHandler):
         parsed_path = urlparse(self.path)
         path = parsed_path.path
         
+        if _game_library is not None and _game_library.handle(self, 'GET'):
+            return
+
         # Main endpoints
         if path == '/' or path == '/status':
             self.send_index_page()
@@ -2933,6 +2965,11 @@ class MiSTerStatusHandler(BaseHTTPRequestHandler):
             self.send_json_response(status)
         else:
             self.send_error_response(404, 'Endpoint not found')
+
+    def do_POST(self):
+        if _game_library is not None and _game_library.handle(self, 'POST'):
+            return
+        self.send_error_response(404, 'Endpoint not found')
 
     # ========== OPTIMIZED CORE FUNCTIONS ==========
     
