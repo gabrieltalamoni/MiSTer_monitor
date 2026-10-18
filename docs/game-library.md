@@ -87,6 +87,37 @@ incluindo a verificação de que sistemas excluídos não são consultados. Para
 personalizar esta seleção no servidor, ajuste `DEFAULT_SYSTEMS` em
 `game_library.py`; `systems=None` na classe permite o modo sem seleção.
 
+## Cache e carregamento progressivo
+
+Esta atualização de desempenho exige **o servidor, o app.js e o firmware**
+novos. A seleção dos sete sistemas é mantida.
+
+- O servidor mantém as listas por 60 segundos, em até 32 entradas e 4 MiB
+  de JSON. Paginação e buscas reutilizam a mesma lista. Consultas simultâneas
+  compartilham a leitura; favoritos são aplicados depois, sem ficarem obsoletos.
+- **Atualizar** envia `refresh=1` e limpa o cache das listas antes de consultar
+  novamente. Reiniciar o servidor também limpa esse cache de memória.
+- No Guition, uma tarefa HTTP busca páginas e capas sem desenhar nem acessar
+  o microSD. A tarefa da interface processa o toque, grava as capas recebidas
+  e decodifica uma imagem por passagem. Respostas de páginas abandonadas são
+  descartadas por uma geração de navegação; a fila guarda só a navegação mais
+  recente. Sair para **Monitor** continua disponível durante os downloads.
+- As capas ficam em `/library-cache-v1/` no microSD **da tela**, entre visitas
+  e reinícios: até 128 JPEGs ou 16 MiB, mais um temporário de até 1 MiB durante
+  a gravação. Ao atingir o limite, o firmware remove um JPEG do próprio cache.
+  Arquivos fora desse cache não são removidos. Gravações incompletas não viram
+  capas válidas. O botão **Atualizar** também descarta as capas da página visível.
+- Sem microSD funcional, os nomes continuam disponíveis e aparece **Sem microSD**.
+  A primeira visita ainda depende da rede; as seguintes podem usar as capas
+  locais. A consulta inicial do catálogo ainda pode levar tempo. Salvar
+  favoritos e solicitar lançamento continuam usando requisições síncronas.
+
+Os 26 testes Python e o teste C++ do cache passaram localmente. O teste C++
+usa o mesmo `LibraryCoverCache.h` do firmware com um adaptador de SD em memória
+para verificar limites, descarte de arquivos, isolamento de caminhos e falhas
+de escrita/rename. A compilação ESP32 e a validação física continuam necessárias;
+o teste em memória não mede a latência real da rede, do cartão ou do JPEG.
+
 ## Instalação do servidor
 
 Faça uma cópia da instalação atual de Monitor antes de extrair os arquivos.
@@ -124,9 +155,9 @@ jogos em cartões cuja consulta ultrapasse 10 segundos. As mensagens distinguem
 tempo limite, erro de conexão, resposta sem tamanho, resposta grande demais,
 transferência incompleta e JSON inválido. O limite de cada página continua em
 24 KiB; a quantidade de jogos exibida por página permanece em seis.
-Essa correção exige atualizar o firmware do Guition; não exige reinstalar o
-servidor nem as capas. Enquanto consulta o servidor, a tela mostra
-**Lendo o microSD...** e pode aguardar até o tempo limite antes de responder ao toque.
+O limite de 60 segundos é mantido nesta versão com cache. Enquanto consulta
+o servidor, a tela mostra **Lendo o microSD...**; páginas e capas são buscadas
+em uma tarefa separada, enquanto os botões continuam sendo processados.
 
 Os builds têm variantes diferentes de chip; use a variante correta:
 
