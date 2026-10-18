@@ -123,6 +123,44 @@ class GameLibrary:
                'system': system[:80]}
         return row
 
+    def _list_rows(self, folder):
+        endpoint = 'menu/view' if folder.startswith(self.arcade) else 'games/view'
+        raw = self.remote.call(endpoint, {'path': folder})
+        if (not isinstance(raw, dict) or 'items' not in raw
+                or (raw['items'] is not None and not isinstance(raw['items'], list))):
+            raise LibraryError(502, 'Atualize o MiSTer Remote: listagem incompatível.')
+        # Remote returns null rather than [] for some empty ZIP folders.
+        return [row for item in (raw['items'] or []) if (row := self._normalise(item))]
+
+    def _has_games(self, folder):
+        """Find one Remote-recognised game, including subfolders and ZIPs.
+
+        Do not infer presence from a system folder, cover, or ZIP filename.
+        Empty physical directories need no HTTP call. Inspect fresh listings
+        on every home request so adding/removing ROMs needs only Atualizar.
+        """
+        pending, visited = [folder], set()
+        while pending:
+            path = pending.pop()
+            if not self.allowed(path):
+                continue
+            resolved = os.path.realpath(path)
+            if resolved in visited:
+                continue
+            visited.add(resolved)
+            if os.path.isdir(path):
+                try:
+                    with os.scandir(path) as entries:
+                        if next(entries, None) is None:
+                            continue
+                except OSError:
+                    raise LibraryError(500, 'Não foi possível verificar a pasta de jogos.')
+            rows = self._list_rows(path)
+            if any(row['kind'] == 'game' for row in rows):
+                return True
+            pending.extend(row['path'] for row in reversed(rows) if row['kind'] == 'folder')
+        return False
+
     def page(self, folder='', page=1, per=6, query='', favorites=False):
         if not isinstance(folder, str) or not isinstance(query, str):
             raise LibraryError(400, 'Pasta ou busca inválida.')
@@ -142,13 +180,13 @@ class GameLibrary:
                 raise LibraryError(403, 'Somente jogos no microSD do MiSTer são permitidos.')
             # Remote enumerates systems on all configured mounts. Filter before
             # sending them to the display: this screen is explicitly microSD.
-            endpoint = 'menu/view' if folder.startswith(self.arcade) else 'games/view'
-            raw = self.remote.call(endpoint, {'path': folder})
-            if not isinstance(raw, dict) or not isinstance(raw.get('items'), list):
-                raise LibraryError(502, 'Atualize o MiSTer Remote: listagem incompatível.')
-            rows = [row for item in raw['items'] if (row := self._normalise(item))]
+            rows = self._list_rows(folder)
             if not folder and os.path.isdir(self.arcade):
-                rows.insert(0, self._normalise({'path': self.arcade, 'name': 'Arcade', 'type': 'folder'}))
+                if not any(row['path'] == self.arcade for row in rows):
+                    rows.insert(0, self._normalise({'path': self.arcade, 'name': 'Arcade', 'type': 'folder'}))
+            if not folder:
+                rows = [row for row in rows if row and
+                        (row['kind'] == 'game' or self._has_games(row['path']))]
             up = os.path.dirname(folder) if folder else ''
             if up in (self.root, self.games) or not self.allowed(up):
                 up = ''
