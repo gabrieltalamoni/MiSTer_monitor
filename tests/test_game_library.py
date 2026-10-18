@@ -7,6 +7,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.request import Request, build_opener, ProxyHandler
@@ -120,10 +121,86 @@ class LibraryTests(unittest.TestCase):
         self.tree({'': [self.row(folder)], str(folder): []})
         self.assertEqual(self.lib.page()['total'], 0)
         self.remote.views[str(folder)]['items'] = [self.row(rom, 'game')]
-        self.assertEqual(self.lib.page()['total'], 1)
+        self.assertEqual(self.lib.page(refresh=True)['total'], 1)
         rom.unlink()
         self.remote.views[str(folder)]['items'] = []
-        self.assertEqual(self.lib.page()['total'], 0)
+        self.assertEqual(self.lib.page(refresh=True)['total'], 0)
+
+    def test_cached_home_and_pagination_avoid_remote_queries(self):
+        self.lib.page()
+        calls = len(self.remote.calls)
+        self.lib.page(page=2, per=1)
+        self.lib.page(query='snes')
+        self.assertEqual(len(self.remote.calls), calls)
+        first = self.games()
+        self.games(page=2)
+        self.games(query='super mario')
+        self.assertEqual(len(self.remote.calls), calls)
+        self.assertEqual(first['total'], 8)
+
+    def test_cache_expires_and_explicit_refresh_sees_changes(self):
+        folder = self.root+'/games/SNES'
+        self.tree({'': [self.row(folder)], folder: [self.row(folder+'/Mario.sfc', 'game')]})
+        with patch('game_library.time.monotonic', return_value=100):
+            self.assertEqual(self.lib.page()['total'], 1)
+        self.remote.views[folder]['items'] = []
+        with patch('game_library.time.monotonic', return_value=120):
+            self.assertEqual(self.lib.page()['total'], 1)
+        with patch('game_library.time.monotonic', return_value=161):
+            self.assertEqual(self.lib.page()['total'], 0)
+            self.remote.views[folder]['items'] = [self.row(folder+'/Mario.sfc', 'game')]
+            self.assertEqual(self.lib.page(refresh=True)['total'], 1)
+
+    def test_cached_rows_keep_favorite_flags_fresh(self):
+        item = self.games()['items'][0]
+        self.lib.set_favorite(item['id'], True)
+        self.assertTrue(self.games()['items'][0]['favorite'])
+        self.lib.set_favorite(item['id'], False)
+        self.assertFalse(self.games()['items'][0]['favorite'])
+
+    def test_concurrent_pages_share_one_remote_listing(self):
+        barrier = threading.Barrier(4)
+        results = []
+        def browse():
+            barrier.wait()
+            results.append(self.games()['total'])
+        threads = [threading.Thread(target=browse) for _ in range(4)]
+        for thread in threads: thread.start()
+        for thread in threads: thread.join(timeout=5)
+        self.assertEqual(results, [8]*4)
+        self.assertEqual(len(self.remote.calls), 1)
+
+    def test_cache_budget_and_lru_eviction(self):
+        self.lib.cache_budget = 7000
+        for number in range(12):
+            self.lib.page(self.root+'/games/SNES/folder'+str(number))
+        self.assertLessEqual(self.lib.list_cache_bytes, self.lib.cache_budget)
+        calls = len(self.remote.calls)
+        self.lib.page(self.root+'/games/SNES/folder0')
+        self.assertEqual(len(self.remote.calls), calls+1)
+
+    def test_http_refresh_flag_invalidates_cached_catalogue(self):
+        folder = self.root+'/games/SNES'
+        self.tree({'': [self.row(folder)], folder: [self.row(folder+'/Mario.sfc', 'game')]})
+        lib = self.lib
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self): lib.handle(self, 'GET')
+            def log_message(self, *args): pass
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        opener = build_opener(ProxyHandler({}))
+        base = 'http://127.0.0.1:'+str(server.server_port)+'/library/page'
+        try:
+            with opener.open(base) as response:
+                self.assertEqual(json.load(response)['total'], 1)
+            self.remote.views[folder]['items'] = []
+            with opener.open(base) as response:
+                self.assertEqual(json.load(response)['total'], 1)
+            with opener.open(base+'?refresh=1') as response:
+                self.assertEqual(json.load(response)['total'], 0)
+        finally:
+            server.shutdown(); server.server_close(); thread.join()
 
     def test_empty_zip_and_empty_arcade_are_hidden(self):
         folder = Path(self.root)/'games/SNES'
