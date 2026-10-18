@@ -8,6 +8,9 @@ Não foi validada em um Guition ou MiSTer físico durante o desenvolvimento.
 
 - Tocar em **Biblioteca**, no canto superior direito do monitor.
 - Escolher um sistema do microSD do **MiSTer** e navegar por suas pastas.
+- Ver na tela **Sistemas** somente sistemas com jogos reconhecidos pelo Remote,
+  incluindo jogos em subpastas e ZIPs. Pastas vazias e pastas só com capas ou
+  documentos ficam fora da lista; o Arcade aparece quando há MRAs.
 - Ver seis capas por página, escolher jogos e iniciar pelo toque.
 - Buscar pelo nome **dentro da pasta atual**, com teclado na tela.
 - Salvar e remover favoritos; a lista permanece após reiniciar o servidor.
@@ -38,6 +41,31 @@ aparecem na interface. A seleção de core alternativo não faz parte desta vers
 
 A biblioteca não faz scraping de toda a coleção, não lê o microSD do display
 como se fosse o do MiSTer e não altera ROMs, BIOS, saves ou core binaries.
+
+## Atualização: somente sistemas com jogos
+
+Para uma biblioteca já instalada, substitua apenas
+`Scripts/.config/mister_monitor/game_library.py` pela versão desta branch,
+guardando uma cópia do arquivo anterior. Execute **MiSTer_Monitor** no menu
+Scripts para reiniciar o servidor e toque em **Atualizar** na biblioteca.
+A atualização vale para o site e para a tela Guition com o firmware da
+biblioteca já instalado; não exige nova gravação do display.
+
+O servidor verifica a presença de jogos antes de calcular a quantidade de
+sistemas e as páginas. A verificação percorre as pastas e ZIPs pelo Remote e
+para no primeiro jogo reconhecido de cada sistema. O botão **Atualizar** refaz
+a consulta, incluindo alterações recentes na coleção. Coleções com muitas
+subpastas podem levar mais tempo para abrir a tela **Sistemas**.
+
+O reconhecimento segue os tipos de arquivo informados pelo Remote; não
+garante que o conteúdo de cada arquivo seja um jogo válido ou que suas BIOS
+estejam instaladas. Erros de consulta aparecem como erro, em vez de fazer um
+sistema parecer vazio. A navegação dentro das pastas mantém seu comportamento.
+
+Os 16 testes do servidor passaram localmente após essa alteração, cobrindo
+sistemas vazios, imagens sem ROMs, subpastas, ZIPs vazios e com jogos, Arcade,
+paginação, atualização da coleção e ciclos/escapes por links simbólicos.
+O filtro ainda precisa de conferência na coleção do usuário.
 
 ## Instalação do servidor
 
