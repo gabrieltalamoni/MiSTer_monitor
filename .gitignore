@@ -20,6 +20,9 @@ secrets.h
 ss_credentials.h
 MiSTer/Scripts/.config/mister_monitor/ra_credentials.ini
 MiSTer/Scripts/.config/mister_monitor/ra_cache/
+MiSTer/Scripts/.config/mister_monitor/library_favorites.json
+MiSTer/Scripts/.config/mister_monitor/library_favorites.json.tmp
+MiSTer/Scripts/.config/mister_monitor/library-backup-*/
 # Manual backups — these have contained live credentials
 *.bak
 *.orig

@@ -3,6 +3,18 @@
 A status monitor for the MiSTer FPGA platform. Displays the currently loaded
 game artwork, system information, storage status, and network details in real time.
 
+## Experimental Guition game library
+
+This branch adds a native touch browser for games on the MiSTer's microSD:
+local covers, folder navigation, search, persistent favorites and confirmed
+launching through MiSTer Remote. A companion browser UI is served at
+`http://<MiSTer-IP>:8081/library`.
+
+See **[installation and limitations](docs/game-library.md)**. The native UI
+is for the **Guition JC8012P4A1C 10.1-inch**, requires a running `remote.sh`,
+and still needs validation on physical hardware. Local artwork uses the
+MiSTer Artwork Pack; missing covers are shown explicitly.
+
 ## Contents
 
 - [Demo videos](#demo-videos)
