@@ -25,11 +25,11 @@ function card(item) {
   button.onclick=()=>{if(state.busy)return;if(item.kind==='folder'){state.folder=item.path;state.page=1;state.favorites=false;el('search').value='';load();}else{state.selected=item;el('game-title').textContent=item.name;el('game-system').textContent=item.system;el('favorite').textContent=item.favorite?'★ Remover favorito':'☆ Favoritar';el('details').showModal();}};
   return button;
 }
-async function load(){
+async function load(refresh=false){
   if(controller) controller.abort();controller=new AbortController();
   const active=controller;
   message('Lendo jogos do microSD…');el('grid').replaceChildren();el('prev').disabled=el('next').disabled=true;
-  const params=new URLSearchParams({folder:state.folder,page:state.page,per:12,q:el('search').value,favorites:state.favorites?'1':'0'});
+  const params=new URLSearchParams({folder:state.folder,page:state.page,per:12,q:el('search').value,favorites:state.favorites?'1':'0',refresh:refresh?'1':'0'});
   try{const result=await request('/library/page?'+params,undefined,active.signal);if(active!==controller)return;
     Object.assign(state,{page:result.page,pages:result.pages,token:result.token,up:result.up});
     el('folder').textContent=state.favorites?'Seus favoritos':state.folder.replace(/^\/media\/fat\//,'')||'Escolha um sistema';
@@ -44,7 +44,7 @@ async function load(){
 el('home').onclick=()=>{state.folder='';state.favorites=false;state.page=1;el('search').value='';load();};
 el('favorites').onclick=()=>{state.favorites=true;state.page=1;el('search').value='';load();};
 el('up').onclick=()=>{state.folder=state.up;state.page=1;el('search').value='';load();};
-el('prev').onclick=()=>{state.page--;load();};el('next').onclick=()=>{state.page++;load();};el('refresh').onclick=load;
+el('prev').onclick=()=>{state.page--;load();};el('next').onclick=()=>{state.page++;load();};el('refresh').onclick=()=>load(true);
 el('search').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{state.page=1;load();},300);};
 el('cancel').onclick=()=>el('details').close();
 function busy(value){state.busy=value;el('launch').disabled=el('favorite').disabled=el('cancel').disabled=value;}
