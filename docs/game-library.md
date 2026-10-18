@@ -98,6 +98,16 @@ Scripts e habilite seu serviço. A navegação não exige gerar índice de busca
 
 ## Instalação do firmware
 
+O firmware corrigido aguarda até **60 segundos** pela resposta HTTP da
+biblioteca (antes, 10 segundos). Isso acomoda a verificação de sistemas com
+jogos em cartões cuja consulta ultrapasse 10 segundos. As mensagens distinguem
+tempo limite, erro de conexão, resposta sem tamanho, resposta grande demais,
+transferência incompleta e JSON inválido. O limite de cada página continua em
+24 KiB; a quantidade de jogos exibida por página permanece em seis.
+Essa correção exige atualizar o firmware do Guition; não exige reinstalar o
+servidor nem as capas. Enquanto consulta o servidor, a tela mostra
+**Lendo o microSD...** e pode aguardar até o tempo limite antes de responder ao toque.
+
 Os builds têm variantes diferentes de chip; use a variante correta:
 
 | Artefato | Hardware |
