@@ -305,3 +305,28 @@ behavior. The native SD cache test covers bounds, isolation and write failures.
 Firmware compilation validates both P4 revisions. Physical image display,
 ScreenScraper responses with privately configured credentials, and RA gameplay
 still require validation on the actual devices.
+
+## Console logos and Nintendo 64 system ID
+
+The native UI now shows the seven console logos on system cards, below game
+covers and in the launch dialog. Separate 360x120 baseline JPEG data files are
+shipped under `library/logos/`, served only through the allowlisted
+`GET /library/logo?system=<id>` endpoint. Page responses include stable,
+versioned `logo_id` values and local logo URLs. The display downloads each
+system logo once into the same bounded 128-file/16 MiB cache as covers; six
+games of one system reuse one logo. The existing cover worker handles logos
+without ScreenScraper, with a 64 KiB transfer limit. Normal subfolders retain
+their folder icons. Unknown systems, missing assets, missing SD and decode
+failures fall back to the text label. Refresh renews visible logos and covers.
+
+These separate art data files come from Rookervik's RetroPie Carbon theme;
+original SVGs, complete upstream license text, attribution and transformation
+notes are included beside the JPEGs. They are not embedded in the firmware.
+`tools/build_library_logos.py` regenerates the JPEGs with CairoSVG and Pillow.
+
+RA validation now queries canonical Remote catalog IDs: `Nintendo64` for N64,
+`MasterSystem` for SMS and `TurboGrafx16` for TGFX16. These are distinct from
+folder names and MGL filenames; the actual launcher remains `_RA_Cores/N64.mgl`.
+The seven-system test checks this translation, including Nintendo64. The
+HTTP integration test exercises all seven logos, aliases and traversal
+rejection. A physical N64 launch still needs verification on the user's MiSTer.
