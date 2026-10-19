@@ -7,7 +7,7 @@
 #include <freertos/task.h>
 
 static std::atomic<uint32_t> libraryNetGeneration{0};
-static QueueHandle_t libraryNetInput = nullptr, libraryNetOutput = nullptr;
+static QueueHandle_t libraryNetInput = nullptr, libraryCoverInput = nullptr, libraryNetOutput = nullptr;
 
 static bool libraryFetchJson(const String& url, JsonDocument& result, String& notice,
                              const JsonDocument* payload = nullptr) {
@@ -50,7 +50,7 @@ struct LibraryNetJob {
   int index=-1;
   String url, body, notice;
   String ssAuth, ssSystem, ssName, ssOrder, ssRegion;
-  bool ssConfigured=false;
+  bool ssConfigured=false, ssEnabled=true;
   uint8_t* data=nullptr;
   size_t size=0;
   ~LibraryNetJob() { free(data); }
@@ -144,6 +144,7 @@ static void libraryFetchCover(LibraryNetJob& job) {
   if (code!=404) {
     job.notice="Capa local: falha HTTP "+String(code)+". Toque em Atualizar."; return;
   }
+  if (!job.ssEnabled) { job.notice="Sem capa local; download automatico desativado."; return; }
   if (!job.ssConfigured) {
     job.notice="Sem capa local. Configure ss_dev_user/ss_dev_pass do ScreenScraper."; return;
   }
@@ -209,10 +210,11 @@ static void libraryFetchCover(LibraryNetJob& job) {
   job.notice="ScreenScraper: capa indisponivel nesta busca.";
 }
 
-static void libraryNetworkTask(void*) {
+static void libraryNetworkTask(void* input) {
+  QueueHandle_t queue=(QueueHandle_t)input;
   for (;;) {
     LibraryNetJob* job=nullptr;
-    if (xQueueReceive(libraryNetInput,&job,portMAX_DELAY)!=pdTRUE || !job) continue;
+    if (xQueueReceive(queue,&job,portMAX_DELAY)!=pdTRUE || !job) continue;
     if (job->generation!=libraryNetGeneration.load()) { delete job; continue; }
     if (job->page) {
       JsonDocument doc;
@@ -225,21 +227,28 @@ static void libraryNetworkTask(void*) {
 }
 
 static bool libraryNetworkStart() {
-  if (libraryNetInput && libraryNetOutput) return true;
+  if (libraryNetInput && libraryCoverInput && libraryNetOutput) return true;
   libraryNetInput=xQueueCreate(1,sizeof(LibraryNetJob*));
-  libraryNetOutput=xQueueCreate(1,sizeof(LibraryNetJob*));
-  if (libraryNetInput && libraryNetOutput &&
-      xTaskCreate(libraryNetworkTask,"library-http",12288,nullptr,1,nullptr)==pdPASS) return true;
+  libraryCoverInput=xQueueCreate(1,sizeof(LibraryNetJob*));
+  libraryNetOutput=xQueueCreate(2,sizeof(LibraryNetJob*));
+  TaskHandle_t pageTask=nullptr,coverTask=nullptr;
+  if (libraryNetInput && libraryCoverInput && libraryNetOutput &&
+      xTaskCreate(libraryNetworkTask,"library-http",12288,libraryNetInput,1,&pageTask)==pdPASS &&
+      xTaskCreate(libraryNetworkTask,"library-covers",12288,libraryCoverInput,1,&coverTask)==pdPASS) return true;
+  if (pageTask) vTaskDelete(pageTask);
+  if (coverTask) vTaskDelete(coverTask);
   if (libraryNetInput) vQueueDelete(libraryNetInput);
+  if (libraryCoverInput) vQueueDelete(libraryCoverInput);
   if (libraryNetOutput) vQueueDelete(libraryNetOutput);
-  libraryNetInput=libraryNetOutput=nullptr;
+  libraryNetInput=libraryCoverInput=libraryNetOutput=nullptr;
   return false;
 }
 
 static bool libraryNetworkSubmit(LibraryNetJob* job) {
   if (!libraryNetworkStart()) return false;
   LibraryNetJob* old=nullptr;
-  // Keep at most the most recent queued navigation request.
-  if (xQueueReceive(libraryNetInput,&old,0)==pdTRUE) delete old;
-  return xQueueSend(libraryNetInput,&job,0)==pdTRUE;
+  // Slow external artwork must never hold a navigation request behind it.
+  QueueHandle_t input=job->page ? libraryNetInput : libraryCoverInput;
+  if (xQueueReceive(input,&old,0)==pdTRUE) delete old;
+  return xQueueSend(input,&job,0)==pdTRUE;
 }

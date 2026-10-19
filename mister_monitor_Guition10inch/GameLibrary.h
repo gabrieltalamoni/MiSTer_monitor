@@ -176,6 +176,7 @@ static String libraryOriginalCore(const String& system) {
 // Snapshot configuration on the UI task. The worker never reads mutable
 // settings, current-game state, the display, or SD.
 static void libraryCoverSource(LibraryNetJob& job,const LibraryItem& item) {
+  job.ssEnabled=ENABLE_AUTO_DOWNLOAD;
   job.ssConfigured=strlen(SCREENSCRAPER_DEV_USER)>0 && strlen(SCREENSCRAPER_DEV_PASS)>0;
   job.ssAuth="devid="+libraryUrlEncode(String(SCREENSCRAPER_DEV_USER))+
       "&devpassword="+libraryUrlEncode(String(SCREENSCRAPER_DEV_PASS))+
