@@ -46,7 +46,7 @@ static bool libraryFetchJson(const String& url, JsonDocument& result, String& no
 
 struct LibraryNetJob {
   uint32_t generation=0;
-  bool page=true, ok=false;
+  bool page=true, logo=false, ok=false;
   int index=-1;
   String url, body, notice;
   String ssAuth, ssSystem, ssName, ssOrder, ssRegion;
@@ -220,6 +220,8 @@ static void libraryNetworkTask(void* input) {
       JsonDocument doc;
       job->ok=libraryFetchJson(job->url,doc,job->notice);
       if (job->ok) serializeJson(doc,job->body);
+    } else if (job->logo) {
+      libraryDownload(*job,job->url,65536,true);
     } else libraryFetchCover(*job);
     // Ownership passes back to the UI, including stale/cancelled results.
     xQueueSend(libraryNetOutput,&job,portMAX_DELAY);

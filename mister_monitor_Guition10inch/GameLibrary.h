@@ -14,7 +14,7 @@ static int libraryPage = 1, libraryPages = 1, libraryTotal = 0;
 static int librarySelected = -1;
 static const int LIBRARY_PAGE_SIZE = 6;
 struct LibraryItem {
-  String id, name, path, system;
+  String id, name, path, system, logoId, logoUrl;
   bool folder = false, favorite = false;
 };
 static LibraryItem libraryItems[LIBRARY_PAGE_SIZE];
@@ -28,6 +28,8 @@ static bool libraryNetBusy=false, libraryLoading=false;
 // 0=pending, 1=downloading, 2=downloaded/cached, 3=unavailable.
 static uint8_t libraryCoverState[LIBRARY_PAGE_SIZE]={};
 static bool libraryCoverPainted[LIBRARY_PAGE_SIZE]={};
+static uint8_t libraryLogoState[LIBRARY_PAGE_SIZE]={};
+static bool libraryLogoPainted[LIBRARY_PAGE_SIZE]={};
 
 static String libraryEncode(const String& value) {
   static const char hex[] = "0123456789ABCDEF";
@@ -83,9 +85,13 @@ static void libraryButton(int x, int y, int w, const String& text, bool active =
 static void libraryLoad(bool refresh=false) {
   if (refresh && sdCardAvailable) {
     // Refresh only the visible covers; never erase unrelated SD content.
-    for (int i=0;i<libraryCount;++i) if (!libraryItems[i].folder) {
-      String path=libraryCoverPath(libraryItems[i].id);
-      if (path.length()) SD.remove(path.c_str());
+    for (int i=0;i<libraryCount;++i) {
+      if (!libraryItems[i].folder) {
+        String path=libraryCoverPath(libraryItems[i].id);
+        if (path.length()) SD.remove(path.c_str());
+      }
+      String logo=libraryCoverPath(libraryItems[i].logoId);
+      if (logo.length()) SD.remove(logo.c_str());
     }
   }
   uint32_t generation=libraryNetGeneration.fetch_add(1)+1;
@@ -122,6 +128,11 @@ static void libraryApplyPage(const String& body) {
     LibraryItem& target=libraryItems[libraryCount];
     target.id=item["id"].as<String>(); target.name=item["name"].as<String>();
     target.path=item["path"].as<String>(); target.system=item["system"].as<String>();
+    target.logoId=item["logo_id"].as<String>(); target.logoUrl=item["logo"].as<String>();
+    if (!libraryCoverIdValid(target.logoId) || !target.logoUrl.startsWith("/library/logo?system=")) {
+      target.logoId=""; target.logoUrl="";
+    }
+    libraryLogoState[libraryCount]=0; libraryLogoPainted[libraryCount]=false;
     target.folder=item["kind"].as<String>()=="folder"; target.favorite=item["favorite"] | false;
     libraryCoverState[libraryCount]=0; libraryCoverPainted[libraryCount]=false;
     ++libraryCount;
@@ -146,6 +157,12 @@ static void libraryPoll() {
         libraryDirty=true;
       } else if (job->index>=0 && job->index<libraryCount) {
         int i=job->index;
+        if (job->logo) {
+          bool stored=job->ok && libraryCacheStore(libraryItems[i].logoId,job->data,job->size);
+          libraryLogoState[i]=stored ? 2 : 3;
+          libraryLogoPainted[i]=false;
+          delete job; continue;
+        }
         bool stored=job->ok && libraryCacheStore(libraryItems[i].id,job->data,job->size);
         libraryCoverState[i]=stored ? 2 : 3;
         libraryCoverPainted[i]=false;
@@ -168,7 +185,7 @@ static String libraryOriginalCore(const String& system) {
   if (core=="sms" || core=="mastersystem") return "Sega Master System";
   if (core=="tgfx16" || core=="tg16" || core=="turbografx16") return "TurboGrafx-16/PC Engine";
   if (core=="nes") return "Nintendo NES/Famicom";
-  if (core=="n64") return "Nintendo 64";
+  if (core=="n64" || core=="nintendo64") return "Nintendo 64";
   if (core=="psx") return "Sony PlayStation";
   return system;
 }
@@ -247,6 +264,51 @@ static void libraryCoverTick() {
   }
 }
 
+// Logos are separate JPEG data shipped with the server, never ScreenScraper
+// queries. They share the same bounded SD cache as covers and are painted on
+// the UI task, one image per pass.
+static bool libraryLogoTick() {
+  if (libraryLoading || libraryDirty || libraryKeyboard || librarySelected>=0) return false;
+  for (int i=0;i<libraryCount;++i) {
+    const LibraryItem& item=libraryItems[i];
+    bool systemCard=item.folder && !libraryFolder.length() && !libraryFavorites;
+    if (libraryLogoPainted[i] || !item.logoId.length() || (item.folder && !systemCard)) continue;
+    if (!sdCardAvailable || libraryLogoState[i]==3) {
+      if (systemCard) {
+        Board.Display.fillRect(28+i*208+12,493,168,24,LIB_PANEL);
+        libraryText(item.name,28+i*208+12,493,2,LIB_TEXT,168);
+      }
+      libraryLogoPainted[i]=true; return true;
+    }
+    String path=libraryCoverPath(item.logoId);
+    if (SD.exists(path.c_str())) {
+      int x=28+i*208;
+      int bx=x+12,by=systemCard ? 305 : 520;
+      int height=systemCard ? 100 : 40;
+      Board.Display.fillRoundRect(bx,by,168,height,6,0xFFFF);
+      PngConvInfo info;
+      if (drawJpegInBox(path.c_str(),bx+3,by+3,162,height-6,false,nullptr,&info)) {
+        libraryLogoPainted[i]=true; return true;
+      }
+      Board.Display.fillRect(bx,by,168,height,LIB_PANEL);
+      SD.remove(path.c_str());
+      if (libraryLogoState[i]==2) libraryLogoState[i]=3;
+      return true;
+    }
+    if (libraryLogoState[i]==1 || libraryNetBusy) continue;
+    LibraryNetJob* job=new(std::nothrow) LibraryNetJob;
+    if (!job) { libraryLogoState[i]=3; return true; }
+    job->page=false; job->logo=true; job->index=i;
+    job->generation=libraryNetGeneration.load();
+    job->url=String("http://")+misterIP+":8081"+item.logoUrl;
+    if (libraryNetworkSubmit(job)) {
+      libraryLogoState[i]=1; libraryNetBusy=true; return true;
+    }
+    delete job; libraryLogoState[i]=3; return true;
+  }
+  return false;
+}
+
 static void libraryDrawKeyboard() {
   Board.Display.fillRect(16, 178, 1248, 478, LIB_BG);
   libraryText("BUSCAR NESTA PASTA", 38, 194, 2, LIB_MINT);
@@ -281,7 +343,11 @@ static void libraryDraw() {
     const LibraryItem& item = libraryItems[i];
     Board.Display.fillRoundRect(x, y, 192, 350, 12, LIB_PANEL);
     Board.Display.drawRoundRect(x, y, 192, 350, 12, LIB_LINE);
-    if (item.folder) {
+    bool systemCard=item.folder && !libraryFolder.length() && !libraryFavorites && item.logoId.length();
+    libraryLogoPainted[i]=false;
+    if (systemCard) {
+      libraryText("Carregando logo...",x+12,y+116,1,LIB_MUTED,168);
+    } else if (item.folder) {
       Board.Display.drawRoundRect(x+52, y+65, 88, 66, 8, LIB_MINT);
       Board.Display.fillRect(x+52, y+56, 38, 14, LIB_MINT);
       libraryText("ABRIR", x+66, y+163, 2, LIB_MINT);
@@ -289,8 +355,8 @@ static void libraryDraw() {
       libraryCoverPainted[i]=false;
       libraryText("Carregando...",x+20,y+114,2,LIB_MUTED,165);
     }
-    libraryText(item.name, x+12, y+273, 2, LIB_TEXT, 168);
-    libraryText(item.folder ? "PASTA" : item.system, x+12, y+312, 1, LIB_MUTED, 168);
+    libraryText(systemCard ? "ABRIR" : item.name, x+12, y+273, 2, LIB_TEXT, 168);
+    if (!systemCard) libraryText(item.folder ? "PASTA" : item.system, x+12, y+312, 1, LIB_MUTED, 168);
     if (item.favorite) libraryText("*", x+164, y+10, 3, LIB_MINT, 25);
   }
   libraryButton(28, 600, 200, "Anterior");
@@ -304,7 +370,14 @@ static void libraryDetails() {
   Board.Display.fillRoundRect(180, 208, 920, 340, 18, LIB_PANEL);
   Board.Display.drawRoundRect(180, 208, 920, 340, 18, LIB_MINT);
   libraryText(item.name, 212, 240, 3, LIB_TEXT, 850);
-  libraryText(item.system, 212, 289, 2, LIB_MINT, 850);
+  String logo=libraryCoverPath(item.logoId);
+  PngConvInfo logoInfo;
+  bool logoDrawn=false;
+  if (logo.length() && sdCardAvailable && SD.exists(logo.c_str())) {
+    Board.Display.fillRoundRect(212,282,220,48,6,0xFFFF);
+    logoDrawn=drawJpegInBox(logo.c_str(),215,285,214,42,false,nullptr,&logoInfo);
+  }
+  if (!logoDrawn) libraryText(item.system, 212, 289, 2, LIB_MINT, 850);
   libraryText("Trocar de jogo encerra a partida atual.", 212, 344, 2, LIB_TEXT, 850);
   libraryText("Salve seu progresso antes de continuar.", 212, 380, 2, LIB_MUTED, 850);
   libraryButton(212, 454, 220, "Cancelar");

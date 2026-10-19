@@ -4367,7 +4367,7 @@ void loop() {
     if (libraryTap.wasPressed()) libraryTouch(libraryTap.x, libraryTap.y);
     if (!libraryActive) return;
     if (libraryDirty) libraryDraw();
-    if (!libraryTap.wasPressed()) libraryCoverTick();
+    if (!libraryTap.wasPressed() && !libraryLogoTick()) libraryCoverTick();
     delay(15);
     return;
   }
