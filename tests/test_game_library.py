@@ -22,10 +22,12 @@ class FakeRemote:
     def __init__(self, root):
         self.root, self.calls, self.fail = root, [], False
 
-    def call(self, endpoint, payload):
+    def call(self, endpoint, payload=None):
         self.calls.append((endpoint, payload))
         if self.fail:
             raise LibraryError(503, 'Remote indisponível')
+        if endpoint.endswith('/rbfs'):
+            return self.rbfs
         if endpoint == 'games/launch':
             return {}
         folder = payload['path']
@@ -348,6 +350,58 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(restarted.page(favorites=True)['total'], 0)
         self.assertFalse(Path(restarted.favorites_file+'.tmp').exists())
 
+    def test_installed_ra_launchers_preserve_mgl_for_all_seven_systems(self):
+        for system, name in [('SNES', 'SNES'), ('Genesis', 'MegaDrive'),
+                             ('SMS', 'SMS'), ('TGFX16', 'TurboGrafx16'),
+                             ('NES', 'NES'), ('N64', 'N64'), ('PSX', 'PSX')]:
+            with self.subTest(system=system):
+                launcher = '_RA_Cores/' + name + '.mgl'
+                path = Path(self.root)/launcher
+                path.parent.mkdir(exist_ok=True)
+                path.write_text('<mistergamedescription/>')
+                self.remote.rbfs = [{'rbf': launcher, 'setname': 'RA_' + name}]
+                item = dict(self.games()['items'][0], system=system)
+                self.lib.entries[item['id']] = item
+                self.lib.last_launch = 0
+                self.lib.launch(item['id'], True)
+                self.assertEqual(self.remote.calls[-2], ('systems/' + system + '/rbfs', None))
+                self.assertEqual(self.remote.calls[-1], ('games/launch',
+                                 {'path': item['path'], 'rbf': launcher}))
+
+    def test_ra_not_advertised_never_silently_launches_standard(self):
+        folder = Path(self.root)/'_RA_Cores'
+        folder.mkdir()
+        (folder/'SNES.mgl').touch()
+        self.remote.rbfs = [{'rbf': '_Console/SNES', 'setname': ''}]
+        item = self.games()['items'][0]
+        with self.assertRaises(LibraryError) as err:
+            self.lib.launch(item['id'], True)
+        self.assertEqual(err.exception.status, 409)
+        self.assertFalse(any(endpoint == 'games/launch' for endpoint, _ in self.remote.calls))
+
+    def test_ra_requires_setname_and_survives_remote_failure_without_launch(self):
+        folder = Path(self.root)/'_RA_Cores'
+        folder.mkdir()
+        (folder/'SNES.mgl').touch()
+        item = self.games()['items'][0]
+        for advertised in (None, {}, [{'rbf': '_RA_Cores/SNES.mgl', 'setname': ''}]):
+            self.remote.rbfs = advertised
+            with self.assertRaises(LibraryError):
+                self.lib.launch(item['id'], True)
+        self.remote.fail = True
+        with self.assertRaises(LibraryError):
+            self.lib.launch(item['id'], True)
+        self.assertFalse(any(endpoint == 'games/launch' for endpoint, _ in self.remote.calls))
+
+    def test_remote_get_request_does_not_post_empty_json(self):
+        client = RemoteClient()
+        response = io.BytesIO(b'[]')
+        with patch.object(client.opener, 'open', return_value=response) as opened:
+            self.assertEqual(client.call('systems/NES/rbfs'), [])
+        request = opened.call_args.args[0]
+        self.assertEqual(request.get_method(), 'GET')
+        self.assertIsNone(request.data)
+        self.assertEqual(request.full_url, 'http://127.0.0.1:8182/api/systems/NES/rbfs')
     def test_large_folder_first_page_remains_launchable(self):
         self.remote.call = lambda endpoint, payload: {'items':[
             {'name':str(i).zfill(5),'path':self.root+'/games/SNES/'+str(i)+'.sfc','type':'game'}
