@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Reproduce separate data assets from Carbon's attributed source SVGs."""
 from pathlib import Path
-import io
+import io,sys
 import cairosvg
 import xml.etree.ElementTree as ET
 from PIL import Image
@@ -26,4 +26,5 @@ from PIL import ImageDraw
 for i,(key,im) in enumerate(rows):
     preview.paste(im,(350,i*150+15))
     ImageDraw.Draw(preview).text((30,i*150+55),key,fill='white',font_size=24)
-preview.save(root.parent/'qa/library_logos_preview.png')
+if len(sys.argv)>1:
+    preview.save(sys.argv[1])
