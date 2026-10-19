@@ -18,6 +18,8 @@ from urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHand
 
 
 DEFAULT_SYSTEMS = ('SNES', 'Genesis', 'SMS', 'TGFX16', 'NES', 'N64', 'PSX')
+RA_LAUNCHERS = {'snes': 'SNES', 'genesis': 'MegaDrive', 'sms': 'SMS',
+                'tgfx16': 'TurboGrafx16', 'nes': 'NES', 'n64': 'N64', 'psx': 'PSX'}
 SYSTEM_ALIASES = {
     'snes': 'snes', 'supernintendo': 'snes', 'superfamicom': 'snes',
     'genesis': 'genesis', 'megadrive': 'genesis',
@@ -45,10 +47,11 @@ class RemoteClient:
         # Ignore environment proxy settings and redirects: commands stay local.
         self.opener = build_opener(ProxyHandler({}), NoRedirect())
 
-    def call(self, endpoint, payload):
+    def call(self, endpoint, payload=None):
         req = Request('http://127.0.0.1:8182/api/' + endpoint,
-                      data=json.dumps(payload).encode(),
-                      headers={'Content-Type': 'application/json'}, method='POST')
+                      data=json.dumps(payload).encode() if payload is not None else None,
+                      headers={'Content-Type': 'application/json'},
+                      method='POST' if payload is not None else 'GET')
         try:
             with self.opener.open(req, timeout=8) as response:
                 raw = response.read(8 * 1024 * 1024 + 1)
@@ -353,8 +356,21 @@ class GameLibrary:
         try:
             if time.monotonic() - self.last_launch < 3:
                 raise LibraryError(429, 'Aguarde alguns segundos antes de iniciar outro jogo.')
-            # Remote selects the core, builds MGL and handles ZIP virtual paths.
-            self.remote.call('games/launch', {'path': row['path']})
+            payload = {'path': row['path']}
+            ra = RA_LAUNCHERS.get(self._system_key(row.get('system', '')))
+            launcher = '_RA_Cores/' + ra + '.mgl' if ra else ''
+            if launcher and os.path.isfile(os.path.join(self.root, launcher)):
+                # Ask Remote to resolve the installed MGL, preserving its
+                # setname/same_dir. Never guess slots or launch the raw RBF.
+                system = next((name for name in DEFAULT_SYSTEMS
+                               if self._system_key(name) == self._system_key(row['system'])), '')
+                cores = self.remote.call('systems/' + system + '/rbfs')
+                if not isinstance(cores, list) or not any(
+                        isinstance(core, dict) and core.get('rbf') == launcher
+                        and str(core.get('setname', '')).startswith('RA_') for core in cores):
+                    raise LibraryError(409, 'Lançador RA instalado, mas não reconhecido pelo Remote. Atualize remote.sh.')
+                payload['rbf'] = launcher
+            self.remote.call('games/launch', payload)
             self.last_launch = time.monotonic()
             return {'status': 'launch_requested', 'name': row['name']}
         finally:
