@@ -364,7 +364,9 @@ class LibraryTests(unittest.TestCase):
                 self.lib.entries[item['id']] = item
                 self.lib.last_launch = 0
                 self.lib.launch(item['id'], True)
-                self.assertEqual(self.remote.calls[-2], ('systems/' + system + '/rbfs', None))
+                remote_id = {'N64': 'Nintendo64', 'SMS': 'MasterSystem',
+                             'TGFX16': 'TurboGrafx16'}.get(system, system)
+                self.assertEqual(self.remote.calls[-2], ('systems/' + remote_id + '/rbfs', None))
                 self.assertEqual(self.remote.calls[-1], ('games/launch',
                                  {'path': item['path'], 'rbf': launcher}))
 
@@ -448,6 +450,37 @@ class LibraryTests(unittest.TestCase):
                 self.assertEqual(json.load(response)['status'],'launch_requested')
         finally:
             server.shutdown();server.server_close();thread.join()
+
+    def test_logo_http_allowlist_aliases_and_page_metadata(self):
+        lib = self.lib
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self): lib.handle(self, 'GET')
+            def log_message(self, *args): pass
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        opener = build_opener(ProxyHandler({}))
+        base = 'http://127.0.0.1:' + str(server.server_port)
+        try:
+            for system in ['SNES', 'MegaDrive', 'MasterSystem', 'TG16', 'NES',
+                           'N64', 'Nintendo64', 'PSX']:
+                with self.subTest(system=system):
+                    with opener.open(base + '/library/logo?system=' + system) as response:
+                        data = response.read()
+                        self.assertEqual(response.headers['Content-Type'], 'image/jpeg')
+                        self.assertTrue(data.startswith(bytes([255, 216])))
+                        self.assertLessEqual(len(data), 65536)
+                        self.assertIsNone(response.headers.get('Access-Control-Allow-Origin'))
+            for system in ['Arcade', '../../config.ini', 'unknown']:
+                with self.assertRaises(HTTPError) as err:
+                    opener.open(base + '/library/logo?system=' + system)
+                self.assertEqual(err.exception.code, 404)
+            item = self.games()['items'][0]
+            self.assertEqual(item['logo'], '/library/logo?system=snes')
+            self.assertEqual(item['logo_id'], lib._id('system-logo-v1:snes'))
+            self.assertNotEqual(item['id'], item['logo_id'])
+        finally:
+            server.shutdown(); server.server_close(); thread.join()
 
     def test_integrated_status_handler_exposes_library(self):
         spec=importlib.util.spec_from_file_location('status_server_for_test',SOURCE/'mister_status_server.py')
