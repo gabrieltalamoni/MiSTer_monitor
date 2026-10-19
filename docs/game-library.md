@@ -255,3 +255,53 @@ MRA e mídia de CD suportada pelo Remote. Depois confirme saves e BIOS na TV.
 - [API Remote: `games/view` e `games/launch`](https://github.com/wizzomafizzo/mrext/blob/main/docs/remote-api.md)
 - [Formato atual da listagem Remote](https://github.com/wizzomafizzo/mrext/blob/main/cmd/remote/games/browse.go)
 - [MiSTer Artwork Pack](https://github.com/chipster6502/MiSTer_artwork_pack)
+
+## Installed RetroAchievements launchers and original display artwork
+
+The library now prefers an installed `_RA_Cores/<system>.mgl` for its seven
+selected systems. Genesis maps to `MegaDrive.mgl`, TGFX16 to
+`TurboGrafx16.mgl`, and the remaining names are SNES, SMS, NES, N64 and PSX.
+Before launch it asks `GET /api/systems/<id>/rbfs` to confirm the exact MGL
+and an `RA_` setname; it sends that MGL as `rbf` to `games/launch`. An installed
+but unrecognized RA launcher is an explicit error, never a silent stock-core
+fallback. Where no RA MGL is installed the existing standard launch remains.
+No cores, MiSTer.ini, main binary or credentials are installed or changed.
+
+On the Guition, a game first reuses the original monitor's `findGameImage`
+cache, including JPEG and PNG and friendly core names. It never deletes files
+from that cache. Then it checks the library's bounded private cache, then the
+MiSTer Artwork Pack. HTTP cover transfers now allow 30-second reads and decode
+chunked transfer encoding with `writeToStream`, into a bounded PSRAM buffer.
+The UI continues handling touch while network work runs. Page requests and
+cover downloads have separate workers, so a slow ScreenScraper response does
+not hold navigation behind it. The existing auto_download setting is honored.
+
+Only a local-pack 404 enables the ScreenScraper fallback. The worker uses a
+snapshot of the same `config.ini` ScreenScraper settings, system mapping,
+media order and preferred region as the original monitor. It uses
+`jeuRecherche.php` and accepts only an exact normalized title on the requested
+system, rejecting ambiguous matches rather than displaying the first fuzzy
+result. Searches are bounded to 256 KiB and media to 1 MiB, at most four media
+attempts per game visit. Authentication/quota HTTP responses pause scraping
+for five minutes. Successful images are requested at 172x242 as JPEG and saved
+in `/library-cache-v1/`; later visits and reboots reuse them. Original monitor
+artwork remains in its own cache. This is a name-based fallback, not the
+original loaded-ROM CRC/hash workflow; some titles and regional variants will
+not resolve. A later hash-based implementation would need a per-ROM identity
+API, not the currently running game's status.
+
+**ScreenScraper credentials:** custom builds do not contain the upstream
+author's private developer credentials. Direct scraping needs your own
+`ss_dev_user` and `ss_dev_pass` in addition to your member settings, configured
+privately on the display's settings page. Do not put secrets in an issue, chat
+or this repository. Without developer credentials, original cached images and
+the installed MiSTer Artwork Pack still work. The UI now explains missing
+configuration, HTTP failures and SD write failures. This build does not claim
+that member credentials alone enable ScreenScraper.
+
+Validation: 30 Python tests cover core choice, all seven aliases, preservation
+of MGL launchers, refusal of unsupported RA overrides and the existing library
+behavior. The native SD cache test covers bounds, isolation and write failures.
+Firmware compilation validates both P4 revisions. Physical image display,
+ScreenScraper responses with privately configured credentials, and RA gameplay
+still require validation on the actual devices.
