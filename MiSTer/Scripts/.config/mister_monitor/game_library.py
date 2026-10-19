@@ -20,6 +20,8 @@ from urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHand
 DEFAULT_SYSTEMS = ('SNES', 'Genesis', 'SMS', 'TGFX16', 'NES', 'N64', 'PSX')
 RA_LAUNCHERS = {'snes': 'SNES', 'genesis': 'MegaDrive', 'sms': 'SMS',
                 'tgfx16': 'TurboGrafx16', 'nes': 'NES', 'n64': 'N64', 'psx': 'PSX'}
+REMOTE_SYSTEM_IDS = {'snes': 'SNES', 'genesis': 'Genesis', 'sms': 'MasterSystem',
+                     'tgfx16': 'TurboGrafx16', 'nes': 'NES', 'n64': 'Nintendo64', 'psx': 'PSX'}
 SYSTEM_ALIASES = {
     'snes': 'snes', 'supernintendo': 'snes', 'superfamicom': 'snes',
     'genesis': 'genesis', 'megadrive': 'genesis',
@@ -305,6 +307,9 @@ class GameLibrary:
                         self.entries.popitem(last=False)
                 row['favorite'] = row['id'] in self.favorites
                 row['artwork'] = '/library/artwork?id=' + row['id'] if row['kind'] == 'game' else ''
+                system_key = self._system_key(row['system'])
+                row['logo_id'] = self._id('system-logo-v1:' + system_key) if system_key in RA_LAUNCHERS else ''
+                row['logo'] = '/library/logo?system=' + system_key if row['logo_id'] else ''
         return {'items': selected, 'page': page, 'pages': pages, 'total': total,
                 'folder': folder, 'up': up, 'token': self.token,
                 'source': 'microSD do MiSTer', 'search_scope': 'current_folder'}
@@ -362,8 +367,7 @@ class GameLibrary:
             if launcher and os.path.isfile(os.path.join(self.root, launcher)):
                 # Ask Remote to resolve the installed MGL, preserving its
                 # setname/same_dir. Never guess slots or launch the raw RBF.
-                system = next((name for name in DEFAULT_SYSTEMS
-                               if self._system_key(name) == self._system_key(row['system'])), '')
+                system = REMOTE_SYSTEM_IDS[self._system_key(row['system'])]
                 cores = self.remote.call('systems/' + system + '/rbfs')
                 if not isinstance(cores, list) or not any(
                         isinstance(core, dict) and core.get('rbf') == launcher
@@ -404,6 +408,18 @@ class GameLibrary:
                 self.respond(handler, 200, self.page(get('folder'), get('page', '1'),
                              get('per', '6'), get('q'), get('favorites') == '1',
                              get('refresh') == '1'))
+            elif method == 'GET' and parsed.path == '/library/logo':
+                key = self._system_key(get('system'))
+                if key not in RA_LAUNCHERS:
+                    raise LibraryError(404, 'Sistema sem logo.')
+                try:
+                    with open(os.path.join(os.path.dirname(__file__), 'library', 'logos', key + '.jpg'), 'rb') as handle:
+                        data = handle.read(65537)
+                except FileNotFoundError:
+                    raise LibraryError(404, 'Logo indisponível. Instale o pacote de logos.')
+                if len(data) > 65536 or not data.startswith(b'\xff\xd8'):
+                    raise LibraryError(404, 'Logo indisponível.')
+                self.respond(handler, 200, data, 'image/jpeg')
             elif method == 'GET' and parsed.path == '/library/artwork':
                 row = self.entry(get('id'))
                 path = self.artwork(row)
