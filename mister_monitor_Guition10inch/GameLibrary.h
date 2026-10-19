@@ -149,6 +149,11 @@ static void libraryPoll() {
         bool stored=job->ok && libraryCacheStore(libraryItems[i].id,job->data,job->size);
         libraryCoverState[i]=stored ? 2 : 3;
         libraryCoverPainted[i]=false;
+        if (!stored) {
+          libraryNotice=job->notice.length() ? job->notice :
+              (job->ok ? "Falha ao gravar capa no microSD da tela." : "Capa indisponivel.");
+          libraryDirty=true;
+        }
       }
     }
     delete job;
@@ -156,6 +161,38 @@ static void libraryPoll() {
 }
 
 // Paint one cover per pass. Downloads run in the HTTP task, not in this loop.
+static String libraryOriginalCore(const String& system) {
+  String core=system; core.toLowerCase();
+  if (core=="snes") return "Super Nintendo/Super Famicom";
+  if (core=="genesis" || core=="megadrive") return "Sega Genesis/Mega Drive";
+  if (core=="sms" || core=="mastersystem") return "Sega Master System";
+  if (core=="tgfx16" || core=="tg16" || core=="turbografx16") return "TurboGrafx-16/PC Engine";
+  if (core=="nes") return "Nintendo NES/Famicom";
+  if (core=="n64") return "Nintendo 64";
+  if (core=="psx") return "Sony PlayStation";
+  return system;
+}
+
+// Snapshot configuration on the UI task. The worker never reads mutable
+// settings, current-game state, the display, or SD.
+static void libraryCoverSource(LibraryNetJob& job,const LibraryItem& item) {
+  job.ssConfigured=strlen(SCREENSCRAPER_DEV_USER)>0 && strlen(SCREENSCRAPER_DEV_PASS)>0;
+  job.ssAuth="devid="+libraryUrlEncode(String(SCREENSCRAPER_DEV_USER))+
+      "&devpassword="+libraryUrlEncode(String(SCREENSCRAPER_DEV_PASS))+
+      "&softname=MiSTer-Monitor-Library&ssid="+libraryUrlEncode(String(SCREENSCRAPER_USER))+
+      "&sspassword="+libraryUrlEncode(String(SCREENSCRAPER_PASS));
+  job.ssSystem=mapCoreToScreenScraperId(libraryOriginalCore(item.system));
+  String title; int depth=0;
+  for (unsigned i=0;i<item.name.length();++i) {
+    char c=item.name[i];
+    if (c=='(' || c=='[') { ++depth; continue; }
+    if (c==')' || c==']') { if (depth) --depth; continue; }
+    if (!depth) title+=c;
+  }
+  title.trim(); job.ssName=title;
+  job.ssOrder=GAME_MEDIA_ORDER_STR; job.ssRegion=String(BOXART_REGION);
+}
+
 static void libraryCoverTick() {
   if (libraryLoading || libraryDirty || libraryKeyboard || librarySelected>=0) return;
   for (int i=0;i<libraryCount;++i) {
@@ -167,6 +204,22 @@ static void libraryCoverTick() {
       Board.Display.fillRect(x,y,172,242,LIB_PANEL);
       libraryText(sdCardAvailable ? "Sem capa" : "Sem microSD",x+24,y+104,2,LIB_MUTED,150);
       libraryCoverPainted[i]=true; return;
+    }
+    if (libraryCoverState[i]==0 && sdCardAvailable) {
+      String original;
+      if (findGameImage(libraryOriginalCore(libraryItems[i].system),libraryItems[i].name,original,nullptr) ||
+          findGameImage(libraryItems[i].system,libraryItems[i].name,original,nullptr)) {
+        PngConvInfo info;
+        String lower=original; lower.toLowerCase();
+        bool ok=lower.endsWith(".png") ?
+            drawPngInBox(original.c_str(),x,y,172,242,false,nullptr,&info) :
+            drawJpegInBox(original.c_str(),x,y,172,242,false,nullptr,&info);
+        if (ok) {
+          if (libraryItems[i].favorite) libraryText("*",28+i*208+164,230,3,LIB_MINT,25);
+          libraryCoverPainted[i]=true; return;
+        }
+        // Never remove or overwrite a file owned by the original monitor.
+      }
     }
     if (SD.exists(path.c_str())) {
       PngConvInfo info;
@@ -182,6 +235,7 @@ static void libraryCoverTick() {
     if (job) {
       job->generation=libraryNetGeneration.load(); job->page=false; job->index=i;
       job->url=String("http://")+misterIP+":8081/library/artwork?id="+libraryItems[i].id;
+      libraryCoverSource(*job,libraryItems[i]);
       if (libraryNetworkSubmit(job)) {
         libraryCoverState[i]=1; libraryNetBusy=true; return;
       }
